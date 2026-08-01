@@ -1,0 +1,1473 @@
+// ─────────────────────────────────────────────────────────────────────────────
+// The Local Rankers CRM — data model
+//
+// Conventions applied to every business model:
+//   · cuid() primary keys
+//   · createdAt / updatedAt timestamps
+//   · deletedAt for soft deletes — ALL reads must filter `deletedAt: null`
+//   · createdById / updatedById audit columns (no FK, so deleting a user
+//     never cascades away business history)
+//   · @@index on deletedAt plus every column used in list filters
+// ─────────────────────────────────────────────────────────────────────────────
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  AUTH · RBAC
+// ═══════════════════════════════════════════════════════════════════════════
+
+enum UserRole {
+  SUPER_ADMIN
+  AGENCY_MANAGER
+  MARKETING_MANAGER
+  SEO_TEAM
+  GOOGLE_ADS_TEAM
+  SOCIAL_MEDIA_TEAM
+  DEVELOPER
+  DESIGNER
+  CONTENT_WRITER
+  CLIENT
+  ACCOUNTANT
+  READ_ONLY
+}
+
+enum UserStatus {
+  ACTIVE
+  INVITED
+  SUSPENDED
+  DEACTIVATED
+}
+
+model User {
+  id            String     @id @default(cuid())
+  name          String?
+  email         String     @unique
+  emailVerified DateTime?
+  image         String?
+  passwordHash  String?
+  role          UserRole   @default(READ_ONLY)
+  status        UserStatus @default(ACTIVE)
+  jobTitle      String?
+  phone         String?
+  timezone      String     @default("America/New_York")
+  locale        String     @default("en-US")
+
+  // Two-factor
+  mfaEnabled Boolean   @default(false)
+  mfaSecret  String?
+  mfaBackup  String[]  @default([])
+  mfaVerifiedAt DateTime?
+
+  lastLoginAt DateTime?
+  lastLoginIp String?
+
+  // A CLIENT-role user is scoped to exactly one client record.
+  clientId String?
+  client   Client? @relation("ClientUsers", fields: [clientId], references: [id], onDelete: SetNull)
+
+  accounts     Account[]
+  sessions     Session[]
+  deviceLogins UserDevice[]
+  employee     Employee?
+
+  ownedClients      Client[]       @relation("ClientAccountManager")
+  assignedTasks     Task[]         @relation("TaskAssignee")
+  createdTasks      Task[]         @relation("TaskCreator")
+  assignedLeads     Lead[]         @relation("LeadOwner")
+  projectMembers    ProjectMember[]
+  meetings          MeetingAttendee[]
+  notifications     Notification[]
+  auditLogs         AuditLog[]
+  ticketsRequested  Ticket[]       @relation("TicketRequester")
+  ticketsAssigned   Ticket[]       @relation("TicketAssignee")
+  ticketMessages    TicketMessage[]
+  uploadedFiles     FileAsset[]
+  timeEntries       TimeEntry[]
+  announcements     Announcement[]
+  articles          KnowledgeArticle[]
+  notes             Note[]
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  @@index([role])
+  @@index([status])
+  @@index([clientId])
+  @@index([deletedAt])
+}
+
+// ── Auth.js adapter models ──────────────────────────────────────────────────
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String? @db.Text
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+  @@index([userId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+}
+
+/// Device / session history surfaced in Settings → Security.
+model UserDevice {
+  id         String    @id @default(cuid())
+  userId     String
+  userAgent  String?
+  browser    String?
+  os         String?
+  ipAddress  String?
+  location   String?
+  lastSeenAt DateTime  @default(now())
+  revokedAt  DateTime?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+}
+
+/// Permissions are stored so Super Admins can tune them at runtime; the
+/// compiled defaults live in src/lib/rbac.ts and seed this table.
+model Permission {
+  id          String @id @default(cuid())
+  key         String @unique // e.g. "clients:update"
+  resource    String
+  action      String
+  description String?
+
+  roles RolePermission[]
+
+  createdAt DateTime @default(now())
+
+  @@index([resource])
+}
+
+model RolePermission {
+  id           String   @id @default(cuid())
+  role         UserRole
+  permissionId String
+  granted      Boolean  @default(true)
+
+  permission Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@unique([role, permissionId])
+  @@index([role])
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  CLIENTS
+// ═══════════════════════════════════════════════════════════════════════════
+
+enum ClientStatus {
+  LEAD
+  ONBOARDING
+  ACTIVE
+  PAUSED
+  INACTIVE
+  CHURNED
+}
+
+enum Priority {
+  LOW
+  MEDIUM
+  HIGH
+  URGENT
+}
+
+model Client {
+  id             String  @id @default(cuid())
+  companyName    String
+  slug           String  @unique
+  ownerName      String?
+  contactPerson  String?
+  email          String?
+  phone          String?
+  website        String?
+  businessCategory String?
+
+  // Address
+  addressLine1 String?
+  addressLine2 String?
+  city         String?
+  state        String?
+  zipCode      String?
+  country      String? @default("United States")
+
+  // Profiles
+  googleBusinessProfile String?
+  facebookUrl           String?
+  instagramUrl          String?
+  linkedinUrl           String?
+  youtubeUrl            String?
+  tiktokUrl             String?
+  twitterUrl            String?
+
+  /// [{ day: "monday", open: "09:00", close: "17:00", closed: false }, …]
+  businessHours Json?
+
+  logoUrl     String?
+  brandColors String[] @default([])
+  notes       String?  @db.Text
+
+  status   ClientStatus @default(ACTIVE)
+  priority Priority     @default(MEDIUM)
+
+  // Commercials
+  monthlyRetainer Decimal?  @db.Decimal(12, 2)
+  startDate       DateTime?
+  renewalDate     DateTime?
+  contractUrl     String?
+
+  accountManagerId String?
+  accountManager   User?   @relation("ClientAccountManager", fields: [accountManagerId], references: [id], onDelete: SetNull)
+
+  users         User[]         @relation("ClientUsers")
+  contacts      ClientContact[]
+  services      ClientService[]
+  tags          ClientTag[]
+  projects      Project[]
+  tasks         Task[]
+  invoices      Invoice[]
+  subscriptions Subscription[]
+  meetings      Meeting[]
+  files         FileAsset[]
+  tickets       Ticket[]
+  notes_        Note[]
+  leads         Lead[]
+  seoKeywords   SeoKeyword[]
+  gbpInsights   GbpInsight[]
+  adsCampaigns  AdsCampaign[]
+  socialPosts   SocialPost[]
+  reports       Report[]
+
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  deletedAt   DateTime?
+  createdById String?
+  updatedById String?
+
+  @@index([status, deletedAt])
+  @@index([accountManagerId])
+  @@index([renewalDate])
+  @@index([companyName])
+  @@index([deletedAt])
+}
+
+model ClientContact {
+  id       String  @id @default(cuid())
+  clientId String
+  name     String
+  role     String?
+  email    String?
+  phone    String?
+  isPrimary Boolean @default(false)
+
+  client Client @relation(fields: [clientId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  @@index([clientId])
+  @@index([deletedAt])
+}
+
+enum ServiceType {
+  LOCAL_SEO
+  NATIONAL_SEO
+  GOOGLE_ADS
+  META_ADS
+  WEB_DESIGN
+  WEB_DEVELOPMENT
+  SOCIAL_MEDIA
+  CONTENT_MARKETING
+  EMAIL_MARKETING
+  GBP_MANAGEMENT
+  REPUTATION_MANAGEMENT
+  CITATION_BUILDING
+  HOSTING_MAINTENANCE
+}
+
+model ClientService {
+  id          String      @id @default(cuid())
+  clientId    String
+  service     ServiceType
+  monthlyFee  Decimal?    @db.Decimal(12, 2)
+  startedAt   DateTime?
+  endedAt     DateTime?
+  isActive    Boolean     @default(true)
+
+  client Client @relation(fields: [clientId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  @@unique([clientId, service])
+  @@index([clientId])
+  @@index([deletedAt])
+}
+
+model Tag {
+  id    String @id @default(cuid())
+  name  String @unique
+  color String @default("#86BD3E")
+
+  clients ClientTag[]
+
+  createdAt DateTime @default(now())
+}
+
+model ClientTag {
+  clientId String
+  tagId    String
+
+  client Client @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  tag    Tag    @relation(fields: [tagId], references: [id], onDelete: Cascade)
+
+  @@id([clientId, tagId])
+  @@index([tagId])
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  LEADS · PIPELINE
+// ═══════════════════════════════════════════════════════════════════════════
+
+enum LeadStatus {
+  NEW
+  CONTACTED
+  QUALIFIED
+  PROPOSAL_SENT
+  NEGOTIATION
+  WON
+  LOST
+}
+
+enum LeadSource {
+  WEBSITE
+  GOOGLE_ADS
+  ORGANIC_SEARCH
+  REFERRAL
+  SOCIAL_MEDIA
+  COLD_OUTREACH
+  EVENT
+  PARTNER
+  OTHER
+}
+
+model Pipeline {
+  id        String  @id @default(cuid())
+  name      String
+  isDefault Boolean @default(false)
+
+  stages PipelineStage[]
+  leads  Lead[]
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  @@index([deletedAt])
+}
+
+model PipelineStage {
+  id          String  @id @default(cuid())
+  pipelineId  String
+  name        String
+  position    Int
+  color       String  @default("#10AA99")
+  /// Used to weight the forecast on the pipeline board.
+  winProbability Int  @default(0)
+
+  pipeline Pipeline @relation(fields: [pipelineId], references: [id], onDelete: Cascade)
+  leads    Lead[]
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  @@unique([pipelineId, position])
+  @@index([pipelineId])
+  @@index([deletedAt])
+}
+
+model Lead {
+  id           String     @id @default(cuid())
+  companyName  String
+  contactName  String?
+  email        String?
+  phone        String?
+  website      String?
+  city         String?
+  state        String?
+  status       LeadStatus @default(NEW)
+  source       LeadSource @default(WEBSITE)
+  priority     Priority   @default(MEDIUM)
+  estimatedValue Decimal? @db.Decimal(12, 2)
+  notes        String?    @db.Text
+
+  pipelineId String?
+  stageId    String?
+  ownerId    String?
+  /// Set once the lead converts, linking back to the client it became.
+  clientId   String?
+
+  /// Position within its Kanban column.
+  position   Int      @default(0)
+
+  contactedAt  DateTime?
+  qualifiedAt  DateTime?
+  closedAt     DateTime?
+  lostReason   String?
+
+  pipeline Pipeline?      @relation(fields: [pipelineId], references: [id], onDelete: SetNull)
+  stage    PipelineStage? @relation(fields: [stageId], references: [id], onDelete: SetNull)
+  owner    User?          @relation("LeadOwner", fields: [ownerId], references: [id], onDelete: SetNull)
+  client   Client?        @relation(fields: [clientId], references: [id], onDelete: SetNull)
+  notes_   Note[]
+
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  deletedAt   DateTime?
+  createdById String?
+  updatedById String?
+
+  @@index([status, deletedAt])
+  @@index([stageId, position])
+  @@index([ownerId])
+  @@index([createdAt])
+  @@index([deletedAt])
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  PROJECTS · TASKS
+// ═══════════════════════════════════════════════════════════════════════════
+
+enum ProjectStatus {
+  PLANNING
+  IN_PROGRESS
+  REVIEW
+  ON_HOLD
+  COMPLETED
+  CANCELLED
+}
+
+enum ProjectType {
+  SEO_CAMPAIGN
+  GOOGLE_ADS_CAMPAIGN
+  META_ADS_CAMPAIGN
+  WEBSITE_BUILD
+  WEBSITE_REDESIGN
+  SOCIAL_MEDIA
+  CONTENT
+  GBP_OPTIMIZATION
+  REPUTATION
+  OTHER
+}
+
+model Project {
+  id          String        @id @default(cuid())
+  name        String
+  description String?       @db.Text
+  type        ProjectType   @default(OTHER)
+  status      ProjectStatus @default(PLANNING)
+  priority    Priority      @default(MEDIUM)
+  progress    Int           @default(0) // 0–100
+
+  clientId String
+  client   Client @relation(fields: [clientId], references: [id], onDelete: Cascade)
+
+  budget    Decimal?  @db.Decimal(12, 2)
+  startDate DateTime?
+  dueDate   DateTime?
+  completedAt DateTime?
+
+  // Website-project specifics (spec's "Website Projects" module)
+  domain        String?
+  hostingProvider String?
+  sslExpiresAt  DateTime?
+  repoUrl       String?
+  stagingUrl    String?
+  liveUrl       String?
+
+  members ProjectMember[]
+  tasks   Task[]
+  files   FileAsset[]
+  notes_  Note[]
+
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  deletedAt   DateTime?
+  createdById String?
+  updatedById String?
+
+  @@index([clientId])
+  @@index([status, deletedAt])
+  @@index([dueDate])
+  @@index([deletedAt])
+}
+
+model ProjectMember {
+  id        String  @id @default(cuid())
+  projectId String
+  userId    String
+  role      String? // "Lead", "Contributor", …
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@unique([projectId, userId])
+  @@index([userId])
+}
+
+enum TaskStatus {
+  TODO
+  IN_PROGRESS
+  IN_REVIEW
+  BLOCKED
+  DONE
+  CANCELLED
+}
+
+model Task {
+  id          String     @id @default(cuid())
+  title       String
+  description String?    @db.Text
+  status      TaskStatus @default(TODO)
+  priority    Priority   @default(MEDIUM)
+
+  projectId String?
+  clientId  String?
+  assigneeId String?
+  creatorId  String?
+
+  dueDate     DateTime?
+  startedAt   DateTime?
+  completedAt DateTime?
+  estimatedHours Decimal? @db.Decimal(6, 2)
+  /// Kanban ordering within a status column.
+  position    Int       @default(0)
+
+  project  Project? @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  client   Client?  @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  assignee User?    @relation("TaskAssignee", fields: [assigneeId], references: [id], onDelete: SetNull)
+  creator  User?    @relation("TaskCreator", fields: [creatorId], references: [id], onDelete: SetNull)
+
+  timeEntries TimeEntry[]
+
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  deletedAt   DateTime?
+  createdById String?
+  updatedById String?
+
+  @@index([assigneeId, dueDate])
+  @@index([projectId])
+  @@index([clientId])
+  @@index([status, deletedAt])
+  @@index([deletedAt])
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  CALENDAR · MEETINGS
+// ═══════════════════════════════════════════════════════════════════════════
+
+enum MeetingStatus {
+  SCHEDULED
+  CONFIRMED
+  COMPLETED
+  CANCELLED
+  NO_SHOW
+}
+
+model Meeting {
+  id          String        @id @default(cuid())
+  title       String
+  description String?       @db.Text
+  status      MeetingStatus @default(SCHEDULED)
+  startsAt    DateTime
+  endsAt      DateTime
+  location    String?
+  meetingUrl  String?
+  provider    String? // "google_meet" | "zoom" | "in_person"
+  externalEventId String?
+  notes       String?       @db.Text
+
+  clientId String?
+  client   Client? @relation(fields: [clientId], references: [id], onDelete: Cascade)
+
+  attendees MeetingAttendee[]
+
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  deletedAt   DateTime?
+  createdById String?
+  updatedById String?
+
+  @@index([startsAt])
+  @@index([clientId])
+  @@index([status, deletedAt])
+  @@index([deletedAt])
+}
+
+model MeetingAttendee {
+  id        String  @id @default(cuid())
+  meetingId String
+  userId    String?
+  email     String?
+  name      String?
+  accepted  Boolean @default(false)
+
+  meeting Meeting @relation(fields: [meetingId], references: [id], onDelete: Cascade)
+  user    User?   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@index([meetingId])
+  @@index([userId])
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  BILLING
+// ═══════════════════════════════════════════════════════════════════════════
+
+enum InvoiceStatus {
+  DRAFT
+  SENT
+  VIEWED
+  PARTIALLY_PAID
+  PAID
+  OVERDUE
+  VOID
+  REFUNDED
+}
+
+model Invoice {
+  id            String        @id @default(cuid())
+  invoiceNumber String        @unique
+  clientId      String
+  status        InvoiceStatus @default(DRAFT)
+
+  issueDate DateTime  @default(now())
+  dueDate   DateTime
+  paidAt    DateTime?
+  sentAt    DateTime?
+  viewedAt  DateTime?
+
+  subtotal    Decimal @db.Decimal(12, 2) @default(0)
+  taxRate     Decimal @db.Decimal(5, 2)  @default(0)
+  taxAmount   Decimal @db.Decimal(12, 2) @default(0)
+  discount    Decimal @db.Decimal(12, 2) @default(0)
+  lateFee     Decimal @db.Decimal(12, 2) @default(0)
+  total       Decimal @db.Decimal(12, 2) @default(0)
+  amountPaid  Decimal @db.Decimal(12, 2) @default(0)
+  currency    String  @default("USD")
+
+  notes  String? @db.Text
+  terms  String? @db.Text
+  pdfUrl String?
+
+  /// Counter for the automated reminder chain (0–3: none → final notice).
+  remindersSent Int       @default(0)
+  lastReminderAt DateTime?
+
+  stripeInvoiceId String?
+  stripePaymentIntentId String?
+
+  client   Client        @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  items    InvoiceItem[]
+  payments Payment[]
+  subscriptionId String?
+  subscription Subscription? @relation(fields: [subscriptionId], references: [id], onDelete: SetNull)
+
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  deletedAt   DateTime?
+  createdById String?
+  updatedById String?
+
+  @@index([clientId])
+  @@index([status, dueDate])
+  @@index([dueDate])
+  @@index([deletedAt])
+}
+
+model InvoiceItem {
+  id          String  @id @default(cuid())
+  invoiceId   String
+  description String
+  quantity    Decimal @db.Decimal(10, 2) @default(1)
+  unitPrice   Decimal @db.Decimal(12, 2)
+  amount      Decimal @db.Decimal(12, 2)
+  service     ServiceType?
+  position    Int     @default(0)
+
+  invoice Invoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([invoiceId])
+}
+
+enum PaymentMethod {
+  STRIPE_CARD
+  STRIPE_ACH
+  AUTHORIZE_NET
+  BANK_TRANSFER
+  CHECK
+  CASH
+  PAYPAL
+  OTHER
+}
+
+enum PaymentStatus {
+  PENDING
+  SUCCEEDED
+  FAILED
+  REFUNDED
+  PARTIALLY_REFUNDED
+}
+
+model Payment {
+  id        String        @id @default(cuid())
+  invoiceId String
+  amount    Decimal       @db.Decimal(12, 2)
+  currency  String        @default("USD")
+  method    PaymentMethod @default(STRIPE_CARD)
+  status    PaymentStatus @default(PENDING)
+  paidAt    DateTime?
+  reference String?
+  gatewayTransactionId String?
+  receiptUrl String?
+  refundedAmount Decimal? @db.Decimal(12, 2)
+  failureReason String?
+
+  invoice Invoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  deletedAt   DateTime?
+  createdById String?
+
+  @@index([invoiceId])
+  @@index([status])
+  @@index([paidAt])
+  @@index([deletedAt])
+}
+
+enum SubscriptionStatus {
+  ACTIVE
+  PAST_DUE
+  PAUSED
+  CANCELLED
+  TRIALING
+}
+
+enum BillingInterval {
+  MONTHLY
+  QUARTERLY
+  SEMI_ANNUAL
+  ANNUAL
+}
+
+model Subscription {
+  id       String             @id @default(cuid())
+  clientId String
+  name     String
+  status   SubscriptionStatus @default(ACTIVE)
+  interval BillingInterval    @default(MONTHLY)
+  amount   Decimal            @db.Decimal(12, 2)
+  currency String             @default("USD")
+
+  startDate          DateTime
+  currentPeriodStart DateTime
+  currentPeriodEnd   DateTime
+  cancelledAt        DateTime?
+  nextInvoiceDate    DateTime?
+  autoRenew          Boolean   @default(true)
+
+  stripeSubscriptionId String?
+
+  client   Client    @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  invoices Invoice[]
+
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  deletedAt   DateTime?
+  createdById String?
+  updatedById String?
+
+  @@index([clientId])
+  @@index([status])
+  @@index([nextInvoiceDate])
+  @@index([deletedAt])
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  HR · EMPLOYEES
+// ═══════════════════════════════════════════════════════════════════════════
+
+enum EmploymentType {
+  FULL_TIME
+  PART_TIME
+  CONTRACT
+  INTERN
+}
+
+model Employee {
+  id     String @id @default(cuid())
+  userId String @unique
+
+  employeeNumber String?        @unique
+  department     String?
+  employmentType EmploymentType @default(FULL_TIME)
+  hireDate       DateTime?
+  terminationDate DateTime?
+  salary         Decimal?       @db.Decimal(12, 2)
+  hourlyRate     Decimal?       @db.Decimal(8, 2)
+  emergencyContact String?
+  emergencyPhone   String?
+
+  user          User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  leaveRequests LeaveRequest[]
+
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  deletedAt   DateTime?
+  createdById String?
+  updatedById String?
+
+  @@index([department])
+  @@index([deletedAt])
+}
+
+enum LeaveType {
+  VACATION
+  SICK
+  PERSONAL
+  BEREAVEMENT
+  UNPAID
+  PARENTAL
+}
+
+enum LeaveStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  CANCELLED
+}
+
+model LeaveRequest {
+  id         String      @id @default(cuid())
+  employeeId String
+  type       LeaveType   @default(VACATION)
+  status     LeaveStatus @default(PENDING)
+  startDate  DateTime
+  endDate    DateTime
+  days       Decimal     @db.Decimal(4, 1)
+  reason     String?     @db.Text
+  reviewedById String?
+  reviewedAt   DateTime?
+  reviewNote   String?
+
+  employee Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  @@index([employeeId])
+  @@index([status])
+  @@index([deletedAt])
+}
+
+model TimeEntry {
+  id          String    @id @default(cuid())
+  userId      String
+  taskId      String?
+  description String?
+  startedAt   DateTime
+  endedAt     DateTime?
+  minutes     Int       @default(0)
+  billable    Boolean   @default(true)
+
+  user User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  task Task? @relation(fields: [taskId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  @@index([userId, startedAt])
+  @@index([taskId])
+  @@index([deletedAt])
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  MARKETING DATA — SEO · GBP · ADS · SOCIAL
+// ═══════════════════════════════════════════════════════════════════════════
+
+model SeoKeyword {
+  id       String  @id @default(cuid())
+  clientId String
+  keyword  String
+  /// Geo-modifier for local rank tracking, e.g. "Hicksville, NY".
+  location String?
+  searchVolume Int?
+  difficulty   Int?
+  isPrimary    Boolean @default(false)
+  targetUrl    String?
+
+  client   Client       @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  rankings SeoRanking[]
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  @@unique([clientId, keyword, location])
+  @@index([clientId])
+  @@index([deletedAt])
+}
+
+model SeoRanking {
+  id        String   @id @default(cuid())
+  keywordId String
+  position  Int?     // null = not ranking in the tracked window
+  previousPosition Int?
+  url       String?
+  /// Position in the Google Map Pack, when tracked.
+  mapPackPosition Int?
+  capturedAt DateTime @default(now())
+
+  keyword SeoKeyword @relation(fields: [keywordId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@unique([keywordId, capturedAt])
+  @@index([keywordId, capturedAt])
+}
+
+/// Monthly Google Business Profile performance snapshot.
+model GbpInsight {
+  id       String   @id @default(cuid())
+  clientId String
+  periodStart DateTime
+  periodEnd   DateTime
+
+  searchViews       Int @default(0)
+  mapViews          Int @default(0)
+  websiteClicks     Int @default(0)
+  phoneCalls        Int @default(0)
+  directionRequests Int @default(0)
+  bookings          Int @default(0)
+  photoViews        Int @default(0)
+
+  totalReviews  Int    @default(0)
+  averageRating Decimal? @db.Decimal(2, 1)
+  newReviews    Int    @default(0)
+  postsPublished Int   @default(0)
+  questionsAnswered Int @default(0)
+
+  client Client @relation(fields: [clientId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  @@unique([clientId, periodStart])
+  @@index([clientId, periodStart])
+  @@index([deletedAt])
+}
+
+enum AdPlatform {
+  GOOGLE_ADS
+  META_ADS
+  MICROSOFT_ADS
+  LINKEDIN_ADS
+  TIKTOK_ADS
+}
+
+enum CampaignStatus {
+  DRAFT
+  ACTIVE
+  PAUSED
+  ENDED
+}
+
+model AdsCampaign {
+  id       String         @id @default(cuid())
+  clientId String
+  platform AdPlatform     @default(GOOGLE_ADS)
+  name     String
+  status   CampaignStatus @default(ACTIVE)
+  externalCampaignId String?
+
+  budgetDaily   Decimal? @db.Decimal(10, 2)
+  budgetMonthly Decimal? @db.Decimal(12, 2)
+
+  // Rolling performance totals, refreshed from the platform APIs in Phase 2.
+  impressions Int     @default(0)
+  clicks      Int     @default(0)
+  conversions Int     @default(0)
+  cost        Decimal @db.Decimal(12, 2) @default(0)
+  revenue     Decimal @db.Decimal(12, 2) @default(0)
+
+  startDate DateTime?
+  endDate   DateTime?
+
+  client Client @relation(fields: [clientId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  @@index([clientId])
+  @@index([platform, status])
+  @@index([deletedAt])
+}
+
+enum SocialPlatform {
+  FACEBOOK
+  INSTAGRAM
+  LINKEDIN
+  TWITTER
+  TIKTOK
+  PINTEREST
+  THREADS
+  GOOGLE_BUSINESS
+}
+
+enum PostStatus {
+  DRAFT
+  SCHEDULED
+  PUBLISHED
+  FAILED
+}
+
+model SocialPost {
+  id       String         @id @default(cuid())
+  clientId String
+  platform SocialPlatform
+  status   PostStatus     @default(DRAFT)
+  content  String         @db.Text
+  mediaUrls String[]      @default([])
+  link     String?
+
+  scheduledFor DateTime?
+  publishedAt  DateTime?
+  externalPostId String?
+  failureReason String?
+
+  likes    Int @default(0)
+  comments Int @default(0)
+  shares   Int @default(0)
+  reach    Int @default(0)
+
+  client Client @relation(fields: [clientId], references: [id], onDelete: Cascade)
+
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  deletedAt   DateTime?
+  createdById String?
+
+  @@index([clientId])
+  @@index([status, scheduledFor])
+  @@index([deletedAt])
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  PLATFORM — FILES · SUPPORT · NOTIFICATIONS · AUDIT · SETTINGS
+// ═══════════════════════════════════════════════════════════════════════════
+
+enum FileCategory {
+  CONTRACT
+  INVOICE
+  REPORT
+  NDA
+  IMAGE
+  VIDEO
+  DOCUMENT
+  OTHER
+}
+
+model FileAsset {
+  id       String       @id @default(cuid())
+  name     String
+  url      String
+  mimeType String?
+  sizeBytes Int?
+  category FileCategory @default(OTHER)
+  folder   String?
+  /// Client-portal visibility — false keeps a file internal to the agency.
+  visibleToClient Boolean @default(false)
+
+  clientId   String?
+  projectId  String?
+  uploadedById String?
+
+  client     Client?  @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  project    Project? @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  uploadedBy User?    @relation(fields: [uploadedById], references: [id], onDelete: SetNull)
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  @@index([clientId])
+  @@index([projectId])
+  @@index([category])
+  @@index([deletedAt])
+}
+
+enum TicketStatus {
+  OPEN
+  IN_PROGRESS
+  WAITING_ON_CLIENT
+  RESOLVED
+  CLOSED
+}
+
+model Ticket {
+  id          String       @id @default(cuid())
+  ticketNumber String      @unique
+  subject     String
+  description String       @db.Text
+  status      TicketStatus @default(OPEN)
+  priority    Priority     @default(MEDIUM)
+
+  clientId    String?
+  requesterId String?
+  assigneeId  String?
+
+  resolvedAt DateTime?
+  closedAt   DateTime?
+  firstResponseAt DateTime?
+
+  client    Client? @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  requester User?   @relation("TicketRequester", fields: [requesterId], references: [id], onDelete: SetNull)
+  assignee  User?   @relation("TicketAssignee", fields: [assigneeId], references: [id], onDelete: SetNull)
+  messages  TicketMessage[]
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  @@index([clientId])
+  @@index([status, priority])
+  @@index([assigneeId])
+  @@index([deletedAt])
+}
+
+model TicketMessage {
+  id       String  @id @default(cuid())
+  ticketId String
+  authorId String?
+  body     String  @db.Text
+  /// Internal notes are hidden from the client portal.
+  isInternal Boolean @default(false)
+  attachments String[] @default([])
+
+  ticket Ticket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  author User?  @relation(fields: [authorId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  @@index([ticketId])
+  @@index([deletedAt])
+}
+
+enum NotificationType {
+  TASK_ASSIGNED
+  TASK_DUE
+  INVOICE_CREATED
+  INVOICE_PAID
+  INVOICE_OVERDUE
+  PAYMENT_RECEIVED
+  MEETING_REMINDER
+  TICKET_UPDATE
+  PROJECT_UPDATE
+  RENEWAL_UPCOMING
+  MENTION
+  SYSTEM
+}
+
+model Notification {
+  id     String           @id @default(cuid())
+  userId String
+  type   NotificationType @default(SYSTEM)
+  title  String
+  body   String?
+  link   String?
+  readAt DateTime?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@index([userId, readAt])
+  @@index([createdAt])
+}
+
+enum AuditAction {
+  CREATE
+  UPDATE
+  DELETE
+  RESTORE
+  LOGIN
+  LOGOUT
+  LOGIN_FAILED
+  EXPORT
+  PERMISSION_CHANGE
+}
+
+model AuditLog {
+  id       String      @id @default(cuid())
+  userId   String?
+  action   AuditAction
+  entity   String // "Client", "Invoice", …
+  entityId String?
+  summary  String?
+
+  /// Field-level diff: { field: { from, to } }
+  changes Json?
+
+  ipAddress String?
+  userAgent String?
+
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([entity, entityId])
+  @@index([createdAt])
+  @@index([action])
+}
+
+model Setting {
+  id       String  @id @default(cuid())
+  key      String  @unique
+  value    Json
+  category String  @default("general")
+  /// Secrets are write-only in the UI and never returned to the client.
+  isSecret Boolean @default(false)
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  updatedById String?
+
+  @@index([category])
+}
+
+enum EmailStatus {
+  QUEUED
+  SENT
+  DELIVERED
+  OPENED
+  CLICKED
+  BOUNCED
+  FAILED
+}
+
+model EmailLog {
+  id        String      @id @default(cuid())
+  to        String
+  from      String
+  subject   String
+  template  String?
+  status    EmailStatus @default(QUEUED)
+  providerId String?
+  error     String?
+
+  relatedEntity   String?
+  relatedEntityId String?
+
+  sentAt      DateTime?
+  deliveredAt DateTime?
+  openedAt    DateTime?
+
+  createdAt DateTime @default(now())
+
+  @@index([to])
+  @@index([status])
+  @@index([relatedEntity, relatedEntityId])
+  @@index([createdAt])
+}
+
+enum AutomationStatus {
+  PENDING
+  RUNNING
+  SUCCESS
+  FAILED
+  SKIPPED
+}
+
+model AutomationLog {
+  id        String           @id @default(cuid())
+  workflow  String // "invoice_reminder_chain", "renewal_notice", …
+  trigger   String?
+  status    AutomationStatus @default(PENDING)
+  payload   Json?
+  result    Json?
+  error     String?
+  runAt     DateTime         @default(now())
+  completedAt DateTime?
+
+  relatedEntity   String?
+  relatedEntityId String?
+
+  createdAt DateTime @default(now())
+
+  @@index([workflow, status])
+  @@index([runAt])
+  @@index([relatedEntity, relatedEntityId])
+}
+
+model Announcement {
+  id       String    @id @default(cuid())
+  title    String
+  body     String    @db.Text
+  authorId String?
+  /// Publish to the client portal as well as the internal app.
+  visibleToClients Boolean @default(false)
+  publishedAt DateTime?
+  expiresAt   DateTime?
+
+  author User? @relation(fields: [authorId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  @@index([publishedAt])
+  @@index([deletedAt])
+}
+
+model KnowledgeArticle {
+  id       String  @id @default(cuid())
+  title    String
+  slug     String  @unique
+  body     String  @db.Text
+  category String?
+  tags     String[] @default([])
+  authorId String?
+  isPublished Boolean @default(false)
+  visibleToClients Boolean @default(false)
+  viewCount Int @default(0)
+
+  author User? @relation(fields: [authorId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  @@index([category])
+  @@index([isPublished])
+  @@index([deletedAt])
+}
+
+/// Free-form notes attachable to a client, lead or project.
+model Note {
+  id       String  @id @default(cuid())
+  body     String  @db.Text
+  authorId String?
+  clientId String?
+  leadId   String?
+  projectId String?
+  isPinned Boolean @default(false)
+
+  author  User?    @relation(fields: [authorId], references: [id], onDelete: SetNull)
+  client  Client?  @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  lead    Lead?    @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  project Project? @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  @@index([clientId])
+  @@index([leadId])
+  @@index([projectId])
+  @@index([deletedAt])
+}
+
+enum ReportType {
+  SEO_MONTHLY
+  GBP_MONTHLY
+  ADS_PERFORMANCE
+  SOCIAL_MEDIA
+  REVENUE
+  CLIENT_SUMMARY
+  CUSTOM
+}
+
+model Report {
+  id       String     @id @default(cuid())
+  clientId String?
+  type     ReportType @default(CUSTOM)
+  title    String
+  periodStart DateTime?
+  periodEnd   DateTime?
+  /// Rendered metrics snapshot so historical reports never change.
+  data     Json?
+  fileUrl  String?
+  isPublished Boolean @default(false)
+  publishedAt DateTime?
+
+  client Client? @relation(fields: [clientId], references: [id], onDelete: Cascade)
+
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  deletedAt   DateTime?
+  createdById String?
+
+  @@index([clientId, type])
+  @@index([periodStart])
+  @@index([deletedAt])
+}
