@@ -31,13 +31,14 @@ npm run db:migrate
 npm run db:seed
 ```
 
-Start the dev server (port 3100 — 3000 is usually taken by the marketing site):
+Start the dev server:
 
 ```bash
-npm run dev -- -p 3100
+npm run dev
 ```
 
-Open http://localhost:3100.
+Open http://localhost:3000. If port 3000 is already taken by another project,
+use `npm run dev:3100` instead.
 
 ---
 
@@ -95,7 +96,8 @@ sidebar), `brand-hero-glow.png`, plus generated favicons.
 | `npm run build` | Production build (runs `prisma generate` first) |
 | `npm run typecheck` | `tsc --noEmit` |
 | `npm run db:migrate` | Create/apply migrations |
-| `npm run db:seed` | Load demo data (destructive: clears business rows) |
+| `npm run db:seed` | Load demo data — **destructive, dev only**: clears business rows and inserts fake clients |
+| `npm run db:bootstrap` | Create one Super Admin from `ADMIN_EMAIL`/`ADMIN_PASSWORD` — use this on production |
 | `npm run db:studio` | Prisma Studio |
 | `npm run db:reset` | Drop, re-migrate, re-seed |
 
@@ -156,6 +158,61 @@ Deletes are soft, so history stays intact for reporting and audit.
 
 ---
 
+## HR: attendance, sales and payroll
+
+### How pay is calculated
+
+| Rule | Behaviour |
+|---|---|
+| Working days | Mon–Fri in that month, minus company holidays. Recomputed monthly, so Aug 2026 = 21 days and Sep 2026 = 22 |
+| Per-day rate | `base salary ÷ working days` |
+| Absence | A working day with **no clock-in** deducts one day's pay. This includes days the employee simply never marked |
+| Late | Clocking in after `shiftStart` is flagged and reported, but **never** deducts |
+| Approved leave | Paid by default. Flip `deductApprovedLeave` in `src/lib/payroll.ts` to deduct it instead |
+| Weekends | Never counted as absence, even with no record |
+| Commission | Percent of the sale converted to payroll currency. Only **approved** sales count |
+
+Rounding: the deduction is derived from the unrounded `salary × days ÷ workingDays`
+ratio and clamped to the base salary. Rounding the per-day rate first and
+multiplying back up overshoots — 50,000 ÷ 22 × 22 = 50,000.06 — which would
+push a fully-absent month to negative pay.
+
+### Worked example — Abdul Wadood
+
+Cold Calling Agent, 09:00–18:00, PKR 50,000/month, 6% commission.
+July 2026 has 23 weekdays; he was absent one day and closed $1,500 of approved
+sales at 278.50 PKR/USD:
+
+```
+Working days               23
+Present                    22  (2 late — not deducted)
+Absent                      1
+
+Base salary        PKR 50,000
+Per working day    PKR  2,174     (50,000 ÷ 23)
+Absence deduction  PKR -2,174
+
+Approved sales          $1,500 @ 278.50
+Commission @ 6%    PKR +25,065
+─────────────────────────────────
+NET PAY            PKR 72,891
+```
+
+Seed him with `npx tsx prisma/seed-abdul.ts` — it prints this breakdown so the
+arithmetic can be checked by eye. Sign in as `abdul@thelocalrankers.com`.
+
+### Dates — important
+
+`Attendance.date`, `Holiday.date` and the payslip period bounds are Postgres
+`date` columns, which Prisma truncates to their **UTC** part. Building them from
+local time silently shifts every record a day earlier east of UTC.
+
+Always use the helpers in `src/lib/date-only.ts` (`todayDateOnly`, `dateOnly`,
+`dateKey`, `formatDateOnly`) for these columns, and never call
+`getDate()`/`getDay()` or `date-fns format()` on a value read from one.
+
+---
+
 ## Status
 
 ### Working now
@@ -163,7 +220,9 @@ Auth (credentials + optional Google/magic link) · 12-role RBAC · full database
 schema · app shell with animated sidebar, ⌘K global search and notifications ·
 dashboard with real aggregate queries and Recharts · full Clients CRUD (TanStack
 Table, server-side pagination/sort/filter, bulk actions, CSV export, 7-tab detail
-page) · client portal overview · audit logging · light/dark.
+page) · client portal overview · audit logging · light/dark ·
+**HR: clock in/out attendance, employee management with salary and commission,
+sales entry with FX conversion, and monthly payroll**.
 
 ### Next phases
 Billing + Stripe/Authorize.Net · payment and email automation chains · employee
@@ -178,8 +237,46 @@ table + form components → page.
 
 ---
 
-## Deploying
+## Deploying (Vercel)
 
-Target is Vercel. Swap `DATABASE_URL` for a hosted Postgres (Neon/Supabase),
-set `AUTH_SECRET` and `AUTH_URL`, and add whichever optional keys you want live.
-`npm run build` runs `prisma generate` automatically.
+### Environment variables
+
+Required:
+
+| Variable | Notes |
+|---|---|
+| `DATABASE_URL` | Hosted Postgres. Must be the **pooled** connection string — serverless opens a connection per invocation. Neon: the host containing `-pooler`. Supabase: port `6543` plus `?pgbouncer=true&connection_limit=1` |
+| `AUTH_SECRET` | `npx auth secret`. Use a different value than local |
+| `AUTH_URL` | e.g. `https://crm.thelocalrankers.com` — used to build password-reset links |
+
+`AUTH_TRUST_HOST` is not needed; `trustHost: true` is set in `src/lib/auth.config.ts`.
+
+Optional — each feature hides itself when its keys are absent:
+
+| Variable | Enables |
+|---|---|
+| `AUTH_GOOGLE_ID` + `AUTH_GOOGLE_SECRET` | Google sign-in (needs both). Add `<AUTH_URL>/api/auth/callback/google` as an authorized redirect URI |
+| `AUTH_RESEND_KEY` + `EMAIL_FROM` | Magic-link sign-in and outbound email |
+
+Everything else in `.env.example` is Phase 2 scaffolding and currently unused.
+
+### First deploy
+
+`npm run build` runs `prisma generate`, but **not** migrations — build-time
+migrations race across concurrent deploys. Apply them yourself, once, with
+`DATABASE_URL` pointing at production:
+
+```bash
+npx prisma migrate deploy
+```
+
+Then create your login. A freshly migrated database has **zero users**, and
+registration is invite-only, so without this step you are locked out:
+
+```bash
+npm run db:bootstrap
+```
+
+It prompts for the email and password (password input is hidden), or reads
+`ADMIN_EMAIL` / `ADMIN_PASSWORD` if you prefer to set them. Do **not** run
+`db:seed` against production — it wipes business tables and inserts fake clients.

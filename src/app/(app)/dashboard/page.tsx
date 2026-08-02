@@ -33,6 +33,9 @@ import {
   getSeoSeries,
   getUpcomingRenewals,
 } from "@/lib/queries/dashboard";
+import { auth } from "@/lib/auth";
+import { getEmployeeForUser, getTodayAttendance } from "@/lib/queries/hr";
+import { ClockWidget } from "@/components/hr/clock-widget";
 import { formatCurrency, formatNumber, formatPercent, initials } from "@/lib/utils";
 
 export const metadata: Metadata = { title: "Dashboard" };
@@ -46,6 +49,7 @@ export default async function DashboardPage() {
     activity,
     renewals,
     dueInvoices,
+    session,
   ] = await Promise.all([
     getDashboardMetrics(),
     getRevenueSeries(),
@@ -54,7 +58,12 @@ export default async function DashboardPage() {
     getRecentActivity(),
     getUpcomingRenewals(),
     getDueInvoices(),
+    auth(),
   ]);
+
+  // Staff with an employee record get a clock-in card up top.
+  const employee = session?.user ? await getEmployeeForUser(session.user.id) : null;
+  const todayAttendance = employee ? await getTodayAttendance(employee.id) : null;
 
   return (
     <>
@@ -62,6 +71,19 @@ export default async function DashboardPage() {
         title="Dashboard"
         description={`Agency performance for ${format(new Date(), "MMMM yyyy")}`}
       />
+
+      {employee && (
+        <div className="mb-6 max-w-sm">
+          <ClockWidget
+            shiftStart={employee.shiftStart}
+            shiftEnd={employee.shiftEnd}
+            todayClockIn={todayAttendance?.clockIn ?? null}
+            todayClockOut={todayAttendance?.clockOut ?? null}
+            minutesWorked={todayAttendance?.minutesWorked ?? null}
+            lateMinutes={todayAttendance?.lateMinutes ?? 0}
+          />
+        </div>
+      )}
 
       {/* KPIs */}
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">

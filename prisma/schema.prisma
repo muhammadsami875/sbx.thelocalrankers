@@ -863,6 +863,7 @@ model Employee {
 
   employeeNumber String?        @unique
   department     String?
+  designation    String? // "Cold Calling Agent", …
   employmentType EmploymentType @default(FULL_TIME)
   hireDate       DateTime?
   terminationDate DateTime?
@@ -871,8 +872,27 @@ model Employee {
   emergencyContact String?
   emergencyPhone   String?
 
+  /// Monthly base salary and the currency it is paid in. Payroll reports in
+  /// this currency; USD sales are converted at entry time.
+  baseSalary Decimal? @db.Decimal(12, 2)
+  currency   String   @default("PKR")
+
+  /// Shift window as "HH:mm" local time — used to flag late arrivals.
+  shiftStart String @default("09:00")
+  shiftEnd   String @default("18:00")
+
+  /// Percent of a sale's value paid as commission, e.g. 6 for 6%.
+  commissionRate Decimal @db.Decimal(5, 2) @default(0)
+
+  /// Overrides the calculated Mon–Fri working-day count when set (e.g. staff
+  /// on a six-day week). Null = derive from the calendar.
+  workingDaysOverride Int?
+
   user          User           @relation(fields: [userId], references: [id], onDelete: Cascade)
   leaveRequests LeaveRequest[]
+  attendance    Attendance[]
+  sales         Sale[]
+  payslips      Payslip[]
 
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
@@ -920,6 +940,177 @@ model LeaveRequest {
   deletedAt DateTime?
 
   @@index([employeeId])
+  @@index([status])
+  @@index([deletedAt])
+}
+
+// ── Attendance ──────────────────────────────────────────────────────────────
+
+enum AttendanceStatus {
+  PRESENT
+  LATE // clocked in after shiftStart — flagged, never deducted
+  HALF_DAY
+  ABSENT // a working day with no clock-in — the only status that deducts pay
+  ON_LEAVE // approved leave; paid unless payroll.deductApprovedLeave is on
+  HOLIDAY
+  WEEKEND
+}
+
+/// One row per employee per calendar day they clocked in. Days with no row are
+/// resolved at payroll time (weekend / holiday / leave / absent) rather than
+/// being pre-created, so the table only ever holds real events.
+model Attendance {
+  id         String           @id @default(cuid())
+  employeeId String
+  /// Midnight local time — the day this record belongs to.
+  date       DateTime         @db.Date
+  clockIn    DateTime?
+  clockOut   DateTime?
+  status     AttendanceStatus @default(PRESENT)
+  /// Derived on clock-out; null while the shift is still open.
+  minutesWorked Int?
+  /// Minutes past shiftStart at clock-in. 0 when on time.
+  lateMinutes   Int           @default(0)
+  notes         String?
+  ipAddress     String?
+
+  employee Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  // One attendance record per employee per day.
+  @@unique([employeeId, date])
+  @@index([employeeId, date])
+  @@index([date])
+  @@index([status])
+  @@index([deletedAt])
+}
+
+/// Company holidays — excluded from the working-day count so nobody is marked
+/// absent on a day the office was closed.
+model Holiday {
+  id     String   @id @default(cuid())
+  date   DateTime @unique @db.Date
+  name   String
+  isPaid Boolean  @default(true)
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  @@index([date])
+  @@index([deletedAt])
+}
+
+// ── Sales & commission ──────────────────────────────────────────────────────
+
+enum SaleStatus {
+  PENDING // logged by the employee, awaiting approval
+  APPROVED // counts toward commission
+  REJECTED
+  PAID
+}
+
+/// A closed deal logged by an employee. Amounts are captured in the currency
+/// the deal was closed in (usually USD) AND converted to the payroll currency
+/// at entry, storing the rate used — so a later FX move never rewrites history.
+model Sale {
+  id         String     @id @default(cuid())
+  employeeId String
+  clientId   String?
+  status     SaleStatus @default(PENDING)
+
+  description String
+  saleDate    DateTime
+
+  /// As sold.
+  amount         Decimal @db.Decimal(12, 2)
+  currency       String  @default("USD")
+  /// Units of payroll currency per 1 unit of `currency`, frozen at entry.
+  exchangeRate   Decimal @db.Decimal(12, 4) @default(1)
+  /// `amount` × `exchangeRate`, stored so reports never recompute.
+  amountConverted Decimal @db.Decimal(14, 2)
+
+  /// Snapshot of the employee's rate at entry — later rate changes must not
+  /// retroactively alter commission already earned.
+  commissionRate   Decimal @db.Decimal(5, 2)
+  commissionAmount Decimal @db.Decimal(14, 2)
+
+  approvedById String?
+  approvedAt   DateTime?
+  /// Set once rolled into a payslip, so it is never paid twice.
+  payslipId    String?
+
+  employee Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  payslip  Payslip? @relation(fields: [payslipId], references: [id], onDelete: SetNull)
+
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  deletedAt   DateTime?
+  createdById String?
+
+  @@index([employeeId, saleDate])
+  @@index([status])
+  @@index([payslipId])
+  @@index([deletedAt])
+}
+
+// ── Payroll ─────────────────────────────────────────────────────────────────
+
+enum PayslipStatus {
+  DRAFT
+  APPROVED
+  PAID
+}
+
+/// An immutable monthly snapshot. Every figure used in the calculation is
+/// stored rather than recomputed, so a payslip issued in August still reads
+/// the same after salary, commission rate or holidays change.
+model Payslip {
+  id         String        @id @default(cuid())
+  employeeId String
+  /// First day of the month this covers.
+  periodStart DateTime     @db.Date
+  periodEnd   DateTime     @db.Date
+  status      PayslipStatus @default(DRAFT)
+  currency    String        @default("PKR")
+
+  // Attendance basis
+  workingDays Int
+  daysPresent Int
+  daysAbsent  Int
+  daysLeave   Int
+  daysHoliday Int
+  lateCount   Int @default(0)
+
+  // Money
+  baseSalary        Decimal @db.Decimal(14, 2)
+  perDayRate        Decimal @db.Decimal(14, 2)
+  absenceDeduction  Decimal @db.Decimal(14, 2) @default(0)
+  otherDeductions   Decimal @db.Decimal(14, 2) @default(0)
+  commissionTotal   Decimal @db.Decimal(14, 2) @default(0)
+  bonus             Decimal @db.Decimal(14, 2) @default(0)
+  netPay            Decimal @db.Decimal(14, 2)
+
+  notes       String?
+  approvedById String?
+  approvedAt   DateTime?
+  paidAt       DateTime?
+
+  employee Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  sales    Sale[]
+
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  deletedAt   DateTime?
+  createdById String?
+
+  // One payslip per employee per period.
+  @@unique([employeeId, periodStart])
+  @@index([employeeId])
+  @@index([periodStart])
   @@index([status])
   @@index([deletedAt])
 }

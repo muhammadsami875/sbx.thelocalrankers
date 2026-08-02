@@ -17,18 +17,33 @@ export default function AuthLayout({
       </div>
 
       {/* Brand side — hidden on small screens where it would just push content */}
-      <div className="relative hidden overflow-hidden bg-brand-navy lg:block">
-        <Image
-          src="/images/brand-hero-glow.png"
-          alt=""
+      {/* Artwork and copy live in separate flex rows rather than stacked
+          layers, so the wordmark in the hero art can never sit behind the
+          headline no matter how the panel is sized. */}
+      <div className="relative hidden flex-col overflow-hidden bg-brand-navy lg:flex">
+        {/* Brand glow behind the art */}
+        <div
           aria-hidden
-          fill
-          priority
-          className="object-cover opacity-90"
+          className="pointer-events-none absolute -top-1/4 left-1/2 size-[46rem] -translate-x-1/2 rounded-full opacity-20 blur-3xl"
+          style={{
+            background:
+              "radial-gradient(circle, var(--color-brand-green) 0%, var(--color-brand-teal) 45%, transparent 70%)",
+          }}
         />
-        <div className="absolute inset-0 bg-gradient-to-t from-brand-navy via-brand-navy/40 to-transparent" />
 
-        <div className="absolute inset-x-0 bottom-0 p-12">
+        <div className="relative min-h-0 flex-1">
+          <Image
+            src="/images/brand-hero-glow.png"
+            alt=""
+            aria-hidden
+            fill
+            priority
+            sizes="50vw"
+            className="object-contain p-10 xl:p-16"
+          />
+        </div>
+
+        <div className="relative shrink-0 px-12 pb-12">
           <h2 className="font-display text-3xl font-semibold leading-tight text-white">
             Every client, campaign and invoice
             <span className="brand-gradient-text"> in one place.</span>
@@ -38,7 +53,7 @@ export default function AuthLayout({
             Google Ads, web design and social, tracked end to end.
           </p>
 
-          <dl className="mt-10 grid grid-cols-3 gap-6 border-t border-white/15 pt-8">
+          <dl className="mt-8 grid grid-cols-3 gap-6 border-t border-white/15 pt-6">
             {[
               { value: "500+", label: "Businesses ranked" },
               { value: "5.0", label: "Average rating" },

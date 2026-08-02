@@ -34,6 +34,9 @@ export const RESOURCES = [
   "tickets",
   "employees",
   "timesheets",
+  "attendance",
+  "sales",
+  "payroll",
   "knowledge",
   "automation",
   "settings",
@@ -73,6 +76,13 @@ const DELIVERY_BASE: Permission[] = [
   "timesheets:create",
   "timesheets:update",
   "reports:read",
+  // Everyone clocks themselves in/out and logs their own sales. Server actions
+  // scope these to the caller's own employee record.
+  "attendance:read",
+  "attendance:create",
+  "sales:read",
+  "sales:create",
+  "payroll:read",
 ];
 
 export const ROLE_PERMISSIONS: Record<UserRole, Permission[]> = {
@@ -103,6 +113,10 @@ export const ROLE_PERMISSIONS: Record<UserRole, Permission[]> = {
     ...crud("tickets"),
     ...crud("employees"),
     ...crud("timesheets"),
+    ...crud("attendance"),
+    ...crud("sales"),
+    ...crud("payroll"),
+    "payroll:export",
     ...crud("knowledge"),
     ...crud("automation"),
     "settings:read",
@@ -214,6 +228,11 @@ export const ROLE_PERMISSIONS: Record<UserRole, Permission[]> = {
   ACCOUNTANT: [
     "dashboard:read",
     "clients:read",
+    ...crud("payroll"),
+    "payroll:export",
+    "attendance:read",
+    "sales:read",
+    "sales:update",
     ...crud("invoices"),
     "invoices:export",
     ...crud("payments"),
