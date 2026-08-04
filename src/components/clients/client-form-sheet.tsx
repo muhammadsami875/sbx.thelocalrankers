@@ -15,9 +15,14 @@ import {
   clientSchema,
   type ClientFormValues,
 } from "@/lib/validations/client";
-import type { ClientListRow } from "@/lib/queries/clients";
 import { cn } from "@/lib/utils";
-import { createClient, updateClient } from "@/app/(app)/clients/actions";
+import {
+  createClient,
+  loadClientFormOptions,
+  loadClientForForm,
+  updateClient,
+} from "@/app/(app)/clients/actions";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -85,20 +90,45 @@ const EMPTY: ClientFormValues = {
 export function ClientFormSheet({
   open,
   onOpenChange,
-  managers,
-  allTags,
-  client,
+  managers: managersProp,
+  allTags: allTagsProp,
+  clientId,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  managers: Manager[];
-  allTags: { id: string; name: string; color: string }[];
-  client?: ClientListRow;
+  /** Optional — the sheet fetches these itself when not supplied. */
+  managers?: Manager[];
+  allTags?: { id: string; name: string; color: string }[];
+  /** Present when editing. The full record is fetched from this id. */
+  clientId?: string;
 }) {
   const router = useRouter();
-  const isEdit = !!client;
+  const isEdit = !!clientId;
+
+  const [managers, setManagers] = React.useState<Manager[]>(managersProp ?? []);
+  const [allTags, setAllTags] = React.useState<
+    { id: string; name: string; color: string }[]
+  >(allTagsProp ?? []);
+
+  // Pickers are fetched on open so callers never have to thread them through.
+  React.useEffect(() => {
+    if (!open || (managersProp?.length && allTagsProp?.length)) return;
+    let cancelled = false;
+    loadClientFormOptions()
+      .then((o) => {
+        if (cancelled) return;
+        setManagers(o.managers);
+        setAllTags(o.tags);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [open, managersProp, allTagsProp]);
   const [pending, setPending] = React.useState(false);
   const [tagInput, setTagInput] = React.useState("");
+
+  const [loading, setLoading] = React.useState(false);
 
   const form = useForm<ClientFormValues>({
     resolver: zodResolver(clientSchema),
@@ -106,37 +136,77 @@ export function ClientFormSheet({
   });
 
   // Reset whenever the sheet opens so stale values never leak between rows.
+  //
+  // On edit the full record is fetched rather than seeded from the table row:
+  // the list query selects only the columns the table renders, so anything it
+  // omits (address, socials, notes…) would be submitted blank and wipe the
+  // stored value.
   React.useEffect(() => {
     if (!open) return;
-    form.reset(
-      client
-        ? {
-            ...EMPTY,
-            companyName: client.companyName,
-            ownerName: client.ownerName ?? "",
-            email: client.email ?? "",
-            phone: client.phone ?? "",
-            website: client.website ?? "",
-            businessCategory: client.businessCategory ?? "",
-            city: client.city ?? "",
-            state: client.state ?? "",
-            status: client.status,
-            priority: client.priority,
-            monthlyRetainer: client.monthlyRetainer ?? "",
-            startDate: client.startDate
-              ? format(client.startDate, "yyyy-MM-dd")
-              : "",
-            renewalDate: client.renewalDate
-              ? format(client.renewalDate, "yyyy-MM-dd")
-              : "",
-            accountManagerId: client.accountManager?.id ?? "",
-            services: client.services,
-            tags: client.tags.map((t) => t.name),
-          }
-        : EMPTY,
-    );
     setTagInput("");
-  }, [open, client, form]);
+
+    if (!clientId) {
+      form.reset(EMPTY);
+      return;
+    }
+
+    let cancelled = false;
+    setLoading(true);
+
+    loadClientForForm(clientId)
+      .then((full) => {
+        if (cancelled) return;
+        if (!full) {
+          toast.error("That client could not be loaded.");
+          onOpenChange(false);
+          return;
+        }
+        form.reset({
+          companyName: full.companyName,
+          ownerName: full.ownerName ?? "",
+          contactPerson: full.contactPerson ?? "",
+          email: full.email ?? "",
+          phone: full.phone ?? "",
+          website: full.website ?? "",
+          businessCategory: full.businessCategory ?? "",
+          addressLine1: full.addressLine1 ?? "",
+          addressLine2: full.addressLine2 ?? "",
+          city: full.city ?? "",
+          state: full.state ?? "",
+          zipCode: full.zipCode ?? "",
+          country: full.country ?? "",
+          googleBusinessProfile: full.googleBusinessProfile ?? "",
+          facebookUrl: full.facebookUrl ?? "",
+          instagramUrl: full.instagramUrl ?? "",
+          linkedinUrl: full.linkedinUrl ?? "",
+          youtubeUrl: full.youtubeUrl ?? "",
+          tiktokUrl: full.tiktokUrl ?? "",
+          twitterUrl: full.twitterUrl ?? "",
+          logoUrl: full.logoUrl ?? "",
+          notes: full.notes ?? "",
+          status: full.status,
+          priority: full.priority,
+          monthlyRetainer: full.monthlyRetainer ?? "",
+          startDate: full.startDate ? format(full.startDate, "yyyy-MM-dd") : "",
+          renewalDate: full.renewalDate
+            ? format(full.renewalDate, "yyyy-MM-dd")
+            : "",
+          accountManagerId: full.accountManagerId ?? "",
+          services: full.services,
+          tags: full.tags,
+        });
+      })
+      .catch(() => {
+        if (!cancelled) toast.error("Could not load this client.");
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [open, clientId, form, onOpenChange]);
 
   const services = form.watch("services") ?? [];
   const tags = form.watch("tags") ?? [];
@@ -144,7 +214,7 @@ export function ClientFormSheet({
   async function onSubmit(values: ClientFormValues) {
     setPending(true);
     const result = isEdit
-      ? await updateClient(client.id, values)
+      ? await updateClient(clientId, values)
       : await createClient(values);
     setPending(false);
 
@@ -216,7 +286,21 @@ export function ClientFormSheet({
               </div>
 
               <div className="scrollbar-thin min-h-0 flex-1 overflow-y-auto px-6 py-4">
-                <TabsContent value="details" className="mt-0 space-y-4">
+                {loading && (
+                  <div className="space-y-4" aria-busy>
+                    {Array.from({ length: 6 }).map((_, i) => (
+                      <div key={i} className="space-y-2">
+                        <Skeleton className="h-3.5 w-24" />
+                        <Skeleton className="h-10 w-full" />
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                <TabsContent
+                  value="details"
+                  className={cn("mt-0 space-y-4", loading && "hidden")}
+                >
                   <Field
                     form={form}
                     name="companyName"
@@ -516,9 +600,15 @@ export function ClientFormSheet({
               >
                 Cancel
               </Button>
-              <Button type="submit" disabled={pending}>
-                {pending && <Loader2 className="animate-spin" />}
-                {isEdit ? "Save changes" : "Create client"}
+              {/* Submitting mid-load would save the placeholder defaults over
+                  the real record. */}
+              <Button type="submit" disabled={pending || loading}>
+                {(pending || loading) && <Loader2 className="animate-spin" />}
+                {loading
+                  ? "Loading…"
+                  : isEdit
+                    ? "Save changes"
+                    : "Create client"}
               </Button>
             </SheetFooter>
           </form>

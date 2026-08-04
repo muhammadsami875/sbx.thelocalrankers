@@ -4,6 +4,9 @@ import { formatDistanceToNow, format } from "date-fns";
 import {
   Building2,
   CalendarClock,
+  Receipt,
+  Repeat,
+  UserPlus,
   ClipboardList,
   CreditCard,
   DollarSign,
@@ -95,12 +98,38 @@ export default async function DashboardPage() {
           hint="Payments received, not invoiced totals"
         />
         <KpiCard
-          label="Profit (est.)"
+          label="Profit"
           value={formatCurrency(metrics.profit.value)}
           change={metrics.profit.change}
           icon={Wallet}
+          accent={metrics.profit.value >= 0 ? "accent" : "destructive"}
+          hint={
+            metrics.profitIsEstimated
+              ? "No expenses recorded yet — add them under Expenses for a true figure"
+              : "Revenue minus recorded expenses, salaries included"
+          }
+        />
+        <KpiCard
+          label="Expenses"
+          value={formatCurrency(metrics.expenses.value)}
+          change={metrics.expenses.change}
+          icon={Receipt}
+          accent="warning"
+          invertTrend
+          hint="Salaries, commission, software and overheads"
+        />
+        <KpiCard
+          label="New clients this month"
+          value={formatNumber(metrics.newClientsThisMonth)}
+          icon={UserPlus}
           accent="accent"
-          hint="Estimated at a 42% margin until the Expenses module lands"
+          hint="Fresh business started this month"
+        />
+        <KpiCard
+          label="Retained clients"
+          value={formatNumber(metrics.returningClients)}
+          icon={Repeat}
+          hint="Active and on the books before this month"
         />
         <KpiCard
           label="MRR"

@@ -193,6 +193,68 @@ export async function getClientById(id: string) {
 
 export type ClientDetail = NonNullable<Awaited<ReturnType<typeof getClientById>>>;
 
+/**
+ * The complete editable field set for one client.
+ *
+ * The list query deliberately selects only what the table renders, so a row
+ * from it must never be used to seed the edit form — any field it omits would
+ * be written back as empty and silently wipe the stored value.
+ */
+export async function getClientForForm(id: string) {
+  const client = await prisma.client.findFirst({
+    where: { id, ...notDeleted },
+    select: {
+      id: true,
+      companyName: true,
+      ownerName: true,
+      contactPerson: true,
+      email: true,
+      phone: true,
+      website: true,
+      businessCategory: true,
+      addressLine1: true,
+      addressLine2: true,
+      city: true,
+      state: true,
+      zipCode: true,
+      country: true,
+      googleBusinessProfile: true,
+      facebookUrl: true,
+      instagramUrl: true,
+      linkedinUrl: true,
+      youtubeUrl: true,
+      tiktokUrl: true,
+      twitterUrl: true,
+      logoUrl: true,
+      notes: true,
+      status: true,
+      priority: true,
+      monthlyRetainer: true,
+      startDate: true,
+      renewalDate: true,
+      accountManagerId: true,
+      services: {
+        where: { isActive: true, deletedAt: null },
+        select: { service: true },
+      },
+      tags: { select: { tag: { select: { name: true } } } },
+    },
+  });
+
+  if (!client) return null;
+
+  return {
+    ...client,
+    monthlyRetainer: client.monthlyRetainer ? Number(client.monthlyRetainer) : null,
+    services: client.services.map((s) => s.service),
+    tags: client.tags.map((t) => t.tag.name),
+  };
+}
+
+export type ClientFormRecord = NonNullable<
+  Awaited<ReturnType<typeof getClientForForm>>
+>;
+
 /** Account managers available in the client form's assignee picker. */
 export async function getAssignableManagers() {
   return prisma.user.findMany({

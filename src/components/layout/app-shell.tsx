@@ -1,8 +1,6 @@
 "use client";
 
 import * as React from "react";
-import { usePathname } from "next/navigation";
-import { AnimatePresence, motion } from "framer-motion";
 import type { UserRole } from "@prisma/client";
 import { Sidebar } from "@/components/layout/sidebar";
 import { Topbar } from "@/components/layout/topbar";
@@ -24,7 +22,6 @@ export function AppShell({
   unreadCount: number;
   children: React.ReactNode;
 }) {
-  const pathname = usePathname();
   const [collapsed, setCollapsed] = React.useState(false);
 
   // Restore the collapse preference after mount so SSR markup stays stable.
@@ -50,18 +47,15 @@ export function AppShell({
         <Topbar user={user} unreadCount={unreadCount} />
 
         <main className="scrollbar-thin flex-1 overflow-y-auto">
-          <AnimatePresence mode="wait">
-            <motion.div
-              key={pathname}
-              initial={{ opacity: 0, y: 8 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -4 }}
-              transition={{ duration: 0.18, ease: "easeOut" }}
-              className="mx-auto w-full max-w-[1600px] p-4 sm:p-6 lg:p-8"
-            >
-              {children}
-            </motion.div>
-          </AnimatePresence>
+          {/* Page transition is a CSS animation, not a JS one.
+              Framer's AnimatePresence held this subtree at its `initial`
+              opacity:0 when a route streamed in behind a Suspense fallback
+              (loading.tsx), leaving the page permanently blank. A CSS
+              animation always resolves, so content can never be stranded
+              invisible by an animation that failed to start. */}
+          <div className="mx-auto w-full max-w-[1600px] p-4 sm:p-6 lg:p-8">
+            {children}
+          </div>
         </main>
       </div>
     </div>

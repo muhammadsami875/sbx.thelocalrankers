@@ -7,6 +7,7 @@ import {
   format,
 } from "date-fns";
 import { prisma, notDeleted } from "@/lib/prisma";
+import { getExpenseTotal } from "@/lib/queries/expenses";
 import { percentChange } from "@/lib/utils";
 
 /**
@@ -128,16 +129,41 @@ export async function getDashboardMetrics() {
   const revenue = Number(revenueThisMonth._sum.amount ?? 0);
   const revenuePrev = Number(revenuePrevMonth._sum.amount ?? 0);
 
-  // Profit uses a configurable margin until the Expenses module lands in
-  // Phase 2 — flagged so nobody mistakes it for a booked figure.
-  const MARGIN = 0.42;
+  // Profit is revenue minus real recorded expenses (salaries included, once
+  // payroll has been posted). No assumed margin.
+  const [expensesThisMonth, expensesPrevMonth, newClients, returningClients] =
+    await Promise.all([
+      getExpenseTotal(monthStart, monthEnd),
+      getExpenseTotal(prevStart, prevEnd),
+      // Fresh business that started this month.
+      prisma.client.count({
+        where: {
+          ...notDeleted,
+          status: { notIn: ["CHURNED", "LEAD"] },
+          startDate: { gte: monthStart, lte: monthEnd },
+        },
+      }),
+      // Retained clients — on the books before this month.
+      prisma.client.count({
+        where: {
+          ...notDeleted,
+          status: "ACTIVE",
+          OR: [{ startDate: { lt: monthStart } }, { startDate: null }],
+        },
+      }),
+    ]);
+
   const adsCost = Number(adsAggregate._sum.cost ?? 0);
   const adsRevenue = Number(adsAggregate._sum.revenue ?? 0);
 
   return {
     revenue: kpi(revenue, revenuePrev),
-    profit: kpi(revenue * MARGIN, revenuePrev * MARGIN),
-    profitIsEstimated: true,
+    profit: kpi(revenue - expensesThisMonth, revenuePrev - expensesPrevMonth),
+    expenses: kpi(expensesThisMonth, expensesPrevMonth),
+    /** True while nothing has been recorded, so the UI can prompt for input. */
+    profitIsEstimated: expensesThisMonth === 0,
+    newClientsThisMonth: newClients,
+    returningClients,
     mrr: Number(mrrAggregate._sum.amount ?? 0),
     arr: Number(mrrAggregate._sum.amount ?? 0) * 12,
     activeClients: kpi(activeClients, activeClientsPrev),

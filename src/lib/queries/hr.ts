@@ -92,6 +92,78 @@ export async function getAttendanceForMonth(employeeId: string, period?: string)
   });
 }
 
+/**
+ * Team-wide attendance summary for a month.
+ *
+ * Admins and managers often have no employee record of their own, so the
+ * attendance page must still be useful to them — this is what it shows instead
+ * of a dead end.
+ */
+export async function getTeamAttendance(period?: string) {
+  const { start, end } = monthRange(period);
+
+  const [employees, records, holidays] = await Promise.all([
+    getEmployees(),
+    prisma.attendance.findMany({
+      where: { ...notDeleted, date: { gte: start, lte: end } },
+      select: {
+        employeeId: true,
+        date: true,
+        status: true,
+        clockIn: true,
+        clockOut: true,
+        minutesWorked: true,
+        lateMinutes: true,
+      },
+    }),
+    prisma.holiday.findMany({
+      where: { ...notDeleted, date: { gte: start, lte: end } },
+      select: { date: true },
+    }),
+  ]);
+
+  const today = todayDateOnly().getTime();
+  const holidayDates = holidays.map((h) => h.date);
+
+  return employees.map((employee) => {
+    const mine = records.filter((r) => r.employeeId === employee.id);
+
+    const summary = calculatePayroll({
+      period: start,
+      baseSalary: employee.baseSalary,
+      attendance: mine as AttendanceDay[],
+      holidays: holidayDates,
+      workingDaysOverride: employee.workingDaysOverride,
+    });
+
+    const todayRecord = mine.find((r) => r.date.getTime() === today) ?? null;
+
+    return {
+      id: employee.id,
+      name: employee.user.name ?? employee.user.email ?? "Unnamed",
+      image: employee.user.image,
+      designation: employee.designation,
+      shiftStart: employee.shiftStart,
+      shiftEnd: employee.shiftEnd,
+      currency: employee.currency,
+      workingDays: summary.workingDays,
+      daysPresent: summary.daysPresent,
+      daysAbsent: summary.daysAbsent,
+      daysLeave: summary.daysLeave,
+      lateCount: summary.lateCount,
+      minutesWorked: mine.reduce((s, r) => s + (r.minutesWorked ?? 0), 0),
+      absenceDeduction: Number(summary.absenceDeduction),
+      todayStatus: todayRecord?.status ?? null,
+      todayClockIn: todayRecord?.clockIn ?? null,
+      todayClockOut: todayRecord?.clockOut ?? null,
+    };
+  });
+}
+
+export type TeamAttendanceRow = Awaited<
+  ReturnType<typeof getTeamAttendance>
+>[number];
+
 export async function getEmployees() {
   const rows = await prisma.employee.findMany({
     where: notDeleted,
@@ -108,6 +180,8 @@ export async function getEmployees() {
       shiftStart: true,
       shiftEnd: true,
       hireDate: true,
+      // Needed by getTeamAttendance so its working-day counts match payroll.
+      workingDaysOverride: true,
       user: {
         select: { id: true, name: true, email: true, image: true, role: true, status: true },
       },

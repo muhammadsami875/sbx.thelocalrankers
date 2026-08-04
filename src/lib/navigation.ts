@@ -1,5 +1,6 @@
 import {
   BarChart3,
+  Banknote,
   Building2,
   CalendarCheck,
   CalendarDays,
@@ -82,9 +83,10 @@ export const NAV_GROUPS: NavGroup[] = [
   {
     label: "Finance",
     items: [
-      { label: "Invoices", href: "/invoices", icon: Receipt, resource: "invoices", soon: true },
-      { label: "Payments", href: "/payments", icon: CreditCard, resource: "payments", soon: true },
-      { label: "Subscriptions", href: "/subscriptions", icon: Repeat, resource: "subscriptions", soon: true },
+      { label: "Invoices", href: "/invoices", icon: Receipt, resource: "invoices" },
+      { label: "Payments", href: "/payments", icon: CreditCard, resource: "payments" },
+      { label: "Subscriptions", href: "/subscriptions", icon: Repeat, resource: "subscriptions" },
+      { label: "Expenses", href: "/expenses", icon: Banknote, resource: "expenses" },
     ],
   },
   {
@@ -152,6 +154,7 @@ export const SEGMENT_LABELS: Record<string, string> = {
   attendance: "Attendance",
   sales: "Sales",
   payroll: "Payroll",
+  expenses: "Expenses",
   timesheets: "Timesheets",
   knowledge: "Knowledge Base",
   automation: "Automation",

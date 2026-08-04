@@ -3,6 +3,11 @@
 import { revalidatePath } from "next/cache";
 import { Prisma } from "@prisma/client";
 import { prisma, notDeleted } from "@/lib/prisma";
+import {
+  getAllTags,
+  getAssignableManagers,
+  getClientForForm,
+} from "@/lib/queries/clients";
 import { requireSession } from "@/lib/auth";
 import { requirePermission, PermissionError } from "@/lib/rbac";
 import { recordAudit } from "@/lib/audit";
@@ -42,6 +47,28 @@ async function uniqueSlug(companyName: string, excludeId?: string) {
     slug = `${base}-${++n}`;
   }
   return slug;
+}
+
+/**
+ * Loads the full editable record for the edit form.
+ *
+ * The clients table row carries only the columns it displays; seeding the form
+ * from it would blank every field it omits on save.
+ */
+export async function loadClientForForm(id: string) {
+  const session = await requireSession();
+  requirePermission(session.user.role, "clients:update");
+  return getClientForForm(id);
+}
+
+/** Managers and tags for the form's pickers, fetched by the sheet itself. */
+export async function loadClientFormOptions() {
+  await requireSession();
+  const [managers, tags] = await Promise.all([
+    getAssignableManagers(),
+    getAllTags(),
+  ]);
+  return { managers, tags };
 }
 
 export async function createClient(

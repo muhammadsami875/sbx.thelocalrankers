@@ -103,7 +103,7 @@ export function ClientsTable({
   const [columnVisibility, setColumnVisibility] =
     React.useState<VisibilityState>({ createdAt: false, businessCategory: false });
   const [search, setSearch] = React.useState(params.get("q") ?? "");
-  const [editing, setEditing] = React.useState<ClientListRow | null>(null);
+  const [editingId, setEditingId] = React.useState<string | null>(null);
   const [creating, setCreating] = React.useState(false);
   const [pending, startTransition] = React.useTransition();
 
@@ -311,7 +311,7 @@ export function ClientsTable({
                 <Link href={`/clients/${row.original.id}`}>View details</Link>
               </DropdownMenuItem>
               {canUpdate && (
-                <DropdownMenuItem onClick={() => setEditing(row.original)}>
+                <DropdownMenuItem onClick={() => setEditingId(row.original.id)}>
                   <Pencil />
                   Edit
                 </DropdownMenuItem>
@@ -732,13 +732,13 @@ export function ClientsTable({
           allTags={allTags}
         />
       )}
-      {canUpdate && editing && (
+      {canUpdate && editingId && (
         <ClientFormSheet
-          open={!!editing}
-          onOpenChange={(open) => !open && setEditing(null)}
+          open={!!editingId}
+          onOpenChange={(open) => !open && setEditingId(null)}
           managers={managers}
           allTags={allTags}
-          client={editing}
+          clientId={editingId}
         />
       )}
     </>

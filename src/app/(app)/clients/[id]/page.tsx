@@ -15,6 +15,9 @@ import {
 import { auth } from "@/lib/auth";
 import { can } from "@/lib/rbac";
 import { getClientById } from "@/lib/queries/clients";
+import { getSubscriptions } from "@/lib/queries/billing";
+import { ClientBillingTab } from "@/components/billing/client-billing-tab";
+import { ClientDetailActions } from "@/components/clients/client-detail-actions";
 import { formatCurrency, initials } from "@/lib/utils";
 import {
   CLIENT_STATUS_LABELS,
@@ -48,7 +51,11 @@ export default async function ClientDetailPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
-  const [session, client] = await Promise.all([auth(), getClientById(id)]);
+  const [session, client, subscriptions] = await Promise.all([
+    auth(),
+    getClientById(id),
+    getSubscriptions(id),
+  ]);
 
   if (!client) notFound();
 
@@ -90,6 +97,10 @@ export default async function ClientDetailPage({
         }
         actions={
           <>
+            <ClientDetailActions
+              clientId={client.id}
+              canUpdate={can(role, "clients:update")}
+            />
             {client.website && (
               <Button variant="outline" asChild>
                 <a href={client.website} target="_blank" rel="noopener noreferrer">
@@ -286,6 +297,7 @@ export default async function ClientDetailPage({
               <TabsTrigger value="invoices">
                 Invoices ({client.invoices.length})
               </TabsTrigger>
+              <TabsTrigger value="billing">Billing</TabsTrigger>
               <TabsTrigger value="files">
                 Files ({client.files.length})
               </TabsTrigger>
@@ -438,6 +450,15 @@ export default async function ClientDetailPage({
                   )}
                 </CardContent>
               </Card>
+            </TabsContent>
+
+            <TabsContent value="billing">
+              <ClientBillingTab
+                clientId={client.id}
+                clientName={client.companyName}
+                subscriptions={subscriptions}
+                canManage={can(role, "subscriptions:update")}
+              />
             </TabsContent>
 
             <TabsContent value="files">

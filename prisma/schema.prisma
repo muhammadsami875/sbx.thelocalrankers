@@ -1115,6 +1115,58 @@ model Payslip {
   @@index([deletedAt])
 }
 
+// ── Expenses ────────────────────────────────────────────────────────────────
+
+enum ExpenseCategory {
+  SALARY
+  COMMISSION
+  CONTRACTOR
+  SOFTWARE
+  ADVERTISING
+  OFFICE
+  TRAVEL
+  EQUIPMENT
+  TAX
+  BANK_FEES
+  OTHER
+}
+
+/// Money going out. Profit is revenue minus these — never an assumed margin.
+model Expense {
+  id          String          @id @default(cuid())
+  description String
+  category    ExpenseCategory @default(OTHER)
+  amount      Decimal         @db.Decimal(14, 2)
+  currency    String          @default("USD")
+  /// The month this expense belongs to for P&L purposes.
+  incurredOn  DateTime        @db.Date
+  vendor      String?
+  notes       String?
+  receiptUrl  String?
+  isRecurring Boolean         @default(false)
+
+  /// Optional attribution — cost of serving a specific client.
+  clientId String?
+  /// Set on salary/commission rows generated from a payslip.
+  employeeId String?
+  /// Links a generated salary expense back to its payslip so posting payroll
+  /// twice for the same month cannot double-count.
+  payslipRef String?
+
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  deletedAt   DateTime?
+  createdById String?
+  updatedById String?
+
+  @@unique([payslipRef])
+  @@index([incurredOn])
+  @@index([category])
+  @@index([clientId])
+  @@index([employeeId])
+  @@index([deletedAt])
+}
+
 model TimeEntry {
   id          String    @id @default(cuid())
   userId      String

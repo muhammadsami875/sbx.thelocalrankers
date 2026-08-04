@@ -201,6 +201,26 @@ NET PAY            PKR 72,891
 Seed him with `npx tsx prisma/seed-abdul.ts` — it prints this breakdown so the
 arithmetic can be checked by eye. Sign in as `abdul@thelocalrankers.com`.
 
+### Two traps to avoid
+
+**Never seed an edit form from a list row.** List queries select only the
+columns their table renders. Seeding a form from one submits every omitted
+field as `""`, silently wiping stored data. Edit forms fetch the full record
+themselves — see `getClientForForm` and `loadInvoice`. This was a live bug that
+blanked 12 client fields (address, socials, notes) on every save.
+
+**Don't add `loading.tsx` to these routes.** A `loading.tsx` creates a Suspense
+boundary that, in this app, never resolves on the client — the page streams
+correctly from the server (verified: full HTML with all content) but the
+fallback is never swapped out, leaving the route permanently blank. It cost a
+long debugging session on the dashboard. If you want skeletons, render them
+inside the page from a `useState` loading flag rather than via `loading.tsx`,
+and verify the route actually paints before shipping.
+
+Related: don't let a JS animation control whether content is visible. The page
+wrapper previously used Framer Motion with `initial={{opacity:0}}`; when the
+animation didn't run the whole page stayed invisible.
+
 ### Dates — important
 
 `Attendance.date`, `Holiday.date` and the payslip period bounds are Postgres
@@ -222,7 +242,9 @@ dashboard with real aggregate queries and Recharts · full Clients CRUD (TanStac
 Table, server-side pagination/sort/filter, bulk actions, CSV export, 7-tab detail
 page) · client portal overview · audit logging · light/dark ·
 **HR: clock in/out attendance, employee management with salary and commission,
-sales entry with FX conversion, and monthly payroll**.
+sales entry with FX conversion, and monthly payroll** ·
+**Billing: invoices with line items (retainers + upsells), payment recording
+with partial payments, and recurring packages driving MRR**.
 
 ### Next phases
 Billing + Stripe/Authorize.Net · payment and email automation chains · employee

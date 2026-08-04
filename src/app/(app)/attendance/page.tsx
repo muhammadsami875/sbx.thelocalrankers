@@ -6,9 +6,12 @@ import {
   getAttendanceForMonth,
   getEmployeeForUser,
   getHolidays,
+  getTeamAttendance,
   getTodayAttendance,
   monthRange,
 } from "@/lib/queries/hr";
+import { can } from "@/lib/rbac";
+import { TeamAttendanceTable } from "@/components/hr/team-attendance-table";
 import { calculatePayroll, formatDuration, type AttendanceDay } from "@/lib/payroll";
 import { formatDateOnly } from "@/lib/date-only";
 import {
@@ -39,22 +42,42 @@ export default async function AttendancePage({
   const [session, params] = await Promise.all([auth(), searchParams]);
   const employee = await getEmployeeForUser(session!.user.id);
 
+  // Admins and managers usually have no employee record of their own, so show
+  // them the team instead of a dead end.
+  const canSeeTeam = can(session!.user.role, "attendance:update");
+
   if (!employee) {
+    const { key: teamKey, start: teamStart } = monthRange(params.month);
+
+    if (!canSeeTeam) {
+      return (
+        <>
+          <PageHeader title="Attendance" />
+          <Card>
+            <CardContent className="py-16 text-center">
+              <UserX className="mx-auto size-8 text-muted-foreground" />
+              <p className="mt-3 text-sm text-muted-foreground">
+                Your account isn&apos;t linked to an employee record yet, so
+                there&apos;s nothing to clock in against.
+              </p>
+              <p className="mt-1 text-sm text-muted-foreground">
+                Ask a Super Admin to create one under Employees.
+              </p>
+            </CardContent>
+          </Card>
+        </>
+      );
+    }
+
+    const team = await getTeamAttendance(params.month);
     return (
       <>
-        <PageHeader title="Attendance" />
-        <Card>
-          <CardContent className="py-16 text-center">
-            <UserX className="mx-auto size-8 text-muted-foreground" />
-            <p className="mt-3 text-sm text-muted-foreground">
-              Your account isn&apos;t linked to an employee record yet, so
-              there&apos;s nothing to clock in against.
-            </p>
-            <p className="mt-1 text-sm text-muted-foreground">
-              Ask a Super Admin to create one under Employees.
-            </p>
-          </CardContent>
-        </Card>
+        <PageHeader
+          title="Team attendance"
+          description={formatDateOnly(teamStart, { month: "long", year: "numeric" })}
+          actions={<MonthPicker value={teamKey} />}
+        />
+        <TeamAttendanceTable rows={team} />
       </>
     );
   }
