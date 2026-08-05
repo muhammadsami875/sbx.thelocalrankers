@@ -4,7 +4,7 @@ import { format } from "date-fns";
 import { Repeat } from "lucide-react";
 import { auth } from "@/lib/auth";
 import { can } from "@/lib/rbac";
-import { getClientOptions, getSubscriptions } from "@/lib/queries/billing";
+import { getClientOptions, getMrr, getSubscriptions } from "@/lib/queries/billing";
 import { formatCurrency } from "@/lib/utils";
 import {
   BILLING_INTERVAL_LABELS,
@@ -26,17 +26,19 @@ import {
 export const metadata: Metadata = { title: "Subscriptions" };
 
 export default async function SubscriptionsPage() {
-  const [session, subscriptions, clients] = await Promise.all([
+  const [session, subscriptions, clients, recurring] = await Promise.all([
     auth(),
     getSubscriptions(),
     getClientOptions(),
+    getMrr(),
   ]);
 
   const role = session!.user.role;
   const canManage = can(role, "subscriptions:update");
 
   const active = subscriptions.filter((s) => s.status === "ACTIVE");
-  const mrr = active.reduce((sum, s) => sum + s.monthlyValue, 0);
+  // MRR is the client retainers, not the subscription rows — one source of truth.
+  const mrr = recurring.mrr;
   const pastDue = subscriptions.filter((s) => s.status === "PAST_DUE");
 
   return (

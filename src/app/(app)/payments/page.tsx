@@ -95,6 +95,8 @@ export default async function PaymentsPage({
         monthLabel={start.toLocaleString("en-US", { month: "long", year: "numeric", timeZone: "UTC" })}
         canInvoice={can(role, "invoices:create")}
         canPay={can(role, "payments:create")}
+        canEditRetainer={can(role, "clients:update")}
+        mrr={summary.mrr}
       />
 
       <div className="mt-6" />

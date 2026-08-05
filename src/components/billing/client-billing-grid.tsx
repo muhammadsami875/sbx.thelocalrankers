@@ -12,6 +12,7 @@ import type {
 import { formatCurrency } from "@/lib/utils";
 import { InvoiceFormSheet } from "@/components/billing/invoice-form-sheet";
 import { PaymentFormSheet } from "@/components/billing/payment-form-sheet";
+import { RetainerCell } from "@/components/billing/retainer-cell";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -49,6 +50,8 @@ export function ClientBillingGrid({
   monthLabel,
   canInvoice,
   canPay,
+  canEditRetainer,
+  mrr,
 }: {
   rows: ClientBillingStatusRow[];
   clients: ClientOption[];
@@ -56,6 +59,8 @@ export function ClientBillingGrid({
   monthLabel: string;
   canInvoice: boolean;
   canPay: boolean;
+  canEditRetainer: boolean;
+  mrr: number;
 }) {
   const router = useRouter();
   const [invoiceFor, setInvoiceFor] = React.useState<string | undefined>();
@@ -100,8 +105,15 @@ export function ClientBillingGrid({
                   {r.companyName}
                 </Link>
               </TableCell>
-              <TableCell className="tabular whitespace-nowrap text-muted-foreground">
-                {r.retainer > 0 ? `${formatCurrency(r.retainer)}/mo` : "—"}
+              <TableCell className="whitespace-nowrap">
+                {/* Editing here writes Client.monthlyRetainer, which is what
+                    MRR sums — so the figure moves immediately. */}
+                <RetainerCell
+                  clientId={r.id}
+                  clientName={r.companyName}
+                  amount={r.retainer}
+                  editable={canEditRetainer}
+                />
               </TableCell>
               <TableCell className="tabular whitespace-nowrap font-medium">
                 {r.invoiced > 0 ? formatCurrency(r.invoiced) : "—"}
@@ -162,7 +174,12 @@ export function ClientBillingGrid({
 
   return (
     <>
-      <div className="mb-4 grid grid-cols-1 gap-4 sm:grid-cols-3">
+      <div className="mb-4 grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        <Tile
+          label="MRR from retainers"
+          value={formatCurrency(mrr)}
+          hint="Sum of active client retainers"
+        />
         <Tile label={`Invoiced in ${monthLabel}`} value={formatCurrency(totals.invoiced)} />
         <Tile label="Collected" value={formatCurrency(totals.paid)} tone="success" />
         <Tile
@@ -240,10 +257,12 @@ export function ClientBillingGrid({
 function Tile({
   label,
   value,
+  hint,
   tone,
 }: {
   label: string;
   value: string;
+  hint?: string;
   tone?: "success" | "danger";
 }) {
   const toneClass =
@@ -256,6 +275,7 @@ function Tile({
       <p className={`tabular mt-2 font-display text-2xl font-semibold ${toneClass}`}>
         {value}
       </p>
+      {hint && <p className="mt-1 text-xs text-muted-foreground">{hint}</p>}
     </Card>
   );
 }

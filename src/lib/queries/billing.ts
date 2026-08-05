@@ -240,12 +240,32 @@ export async function getOpenInvoices() {
   }));
 }
 
+/**
+ * Monthly recurring revenue.
+ *
+ * Sourced from `Client.monthlyRetainer` — the field edited directly on the
+ * client — so changing a client's amount immediately moves MRR.
+ *
+ * Subscriptions are a scheduling layer on top (when to invoice, what interval);
+ * an active monthly subscription writes its amount back onto the client, so the
+ * two stay consistent without MRR having two sources of truth.
+ */
+export async function getMrr() {
+  const agg = await prisma.client.aggregate({
+    _sum: { monthlyRetainer: true },
+    _count: true,
+    where: { ...notDeleted, status: "ACTIVE" },
+  });
+  const mrr = Number(agg._sum.monthlyRetainer ?? 0);
+  return { mrr, arr: mrr * 12, activeClients: agg._count };
+}
+
 /** Headline figures for the invoices and payments pages. */
 export async function getBillingSummary() {
   const now = new Date();
   const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
 
-  const [open, overdue, collectedThisMonth, subs] = await Promise.all([
+  const [open, overdue, collectedThisMonth, recurring] = await Promise.all([
     prisma.invoice.aggregate({
       _sum: { total: true, amountPaid: true },
       _count: true,
@@ -267,16 +287,8 @@ export async function getBillingSummary() {
         paidAt: { gte: monthStart },
       },
     }),
-    prisma.subscription.findMany({
-      where: { ...notDeleted, status: "ACTIVE" },
-      select: { amount: true, interval: true },
-    }),
+    getMrr(),
   ]);
-
-  const mrr = subs.reduce(
-    (sum, s) => sum + Number(s.amount) / INTERVAL_MONTHS[s.interval],
-    0,
-  );
 
   return {
     outstanding:
@@ -286,8 +298,8 @@ export async function getBillingSummary() {
       Number(overdue._sum.total ?? 0) - Number(overdue._sum.amountPaid ?? 0),
     overdueCount: overdue._count,
     collectedThisMonth: Number(collectedThisMonth._sum.amount ?? 0),
-    mrr,
-    arr: mrr * 12,
+    mrr: recurring.mrr,
+    arr: recurring.arr,
   };
 }
 

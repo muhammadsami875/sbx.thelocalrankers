@@ -8,6 +8,7 @@ import {
 } from "date-fns";
 import { prisma, notDeleted } from "@/lib/prisma";
 import { getExpenseTotal } from "@/lib/queries/expenses";
+import { getMrr } from "@/lib/queries/billing";
 import { percentChange } from "@/lib/utils";
 
 /**
@@ -52,7 +53,7 @@ export async function getDashboardMetrics() {
     leadsPrevMonth,
     adsAggregate,
     gbpAggregate,
-    mrrAggregate,
+    recurring,
   ] = await Promise.all([
     prisma.payment.aggregate({
       _sum: { amount: true },
@@ -120,10 +121,9 @@ export async function getDashboardMetrics() {
       _avg: { averageRating: true },
       where: { ...notDeleted, periodStart: { gte: subMonths(now, 1) } },
     }),
-    prisma.subscription.aggregate({
-      _sum: { amount: true },
-      where: { ...notDeleted, status: "ACTIVE", interval: "MONTHLY" },
-    }),
+    // MRR comes from Client.monthlyRetainer so editing a client's amount
+    // moves it immediately — see getMrr().
+    getMrr(),
   ]);
 
   const revenue = Number(revenueThisMonth._sum.amount ?? 0);
@@ -164,8 +164,8 @@ export async function getDashboardMetrics() {
     profitIsEstimated: expensesThisMonth === 0,
     newClientsThisMonth: newClients,
     returningClients,
-    mrr: Number(mrrAggregate._sum.amount ?? 0),
-    arr: Number(mrrAggregate._sum.amount ?? 0) * 12,
+    mrr: recurring.mrr,
+    arr: recurring.arr,
     activeClients: kpi(activeClients, activeClientsPrev),
     inactiveClients,
     pendingPayments: Number(pendingInvoices._sum.total ?? 0),
