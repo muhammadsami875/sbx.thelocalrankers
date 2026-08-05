@@ -63,6 +63,15 @@ export const NAV_GROUPS: NavGroup[] = [
     ],
   },
   {
+    label: "Finance",
+    items: [
+      { label: "Invoices", href: "/invoices", icon: Receipt, resource: "invoices" },
+      { label: "Payments", href: "/payments", icon: CreditCard, resource: "payments" },
+      { label: "Subscriptions", href: "/subscriptions", icon: Repeat, resource: "subscriptions" },
+      { label: "Expenses", href: "/expenses", icon: Banknote, resource: "expenses" },
+    ],
+  },
+  {
     label: "Delivery",
     items: [
       { label: "Projects", href: "/projects", icon: FolderKanban, resource: "projects", soon: true },
@@ -78,15 +87,6 @@ export const NAV_GROUPS: NavGroup[] = [
       { label: "Ads", href: "/ads", icon: Megaphone, resource: "ads", soon: true },
       { label: "Social", href: "/social", icon: Share2, resource: "social", soon: true },
       { label: "Content", href: "/content", icon: FileText, resource: "content", soon: true },
-    ],
-  },
-  {
-    label: "Finance",
-    items: [
-      { label: "Invoices", href: "/invoices", icon: Receipt, resource: "invoices" },
-      { label: "Payments", href: "/payments", icon: CreditCard, resource: "payments" },
-      { label: "Subscriptions", href: "/subscriptions", icon: Repeat, resource: "subscriptions" },
-      { label: "Expenses", href: "/expenses", icon: Banknote, resource: "expenses" },
     ],
   },
   {
